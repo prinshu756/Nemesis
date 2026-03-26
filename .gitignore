@@ -1,3 +1,5 @@
-*logs
+*log
+*.o
+.vscode/
 anomalies.log
 packets.log
