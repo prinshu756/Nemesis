@@ -1,6 +1,0 @@
-{"time": "2026-03-26T04:23:49.208087", "mac": "52:55:0a:00:02:02", "anomaly_type": "device_type_change", "details": {"from": "Linux", "to": "Router", "time": "2026-03-26T04:23:49.207876", "old_ttl": 64, "new_ttl": 255}}
-{"time": "2026-03-26T04:23:49.246275", "mac": "52:55:0a:00:02:02", "anomaly_type": "device_type_change", "details": {"from": "Router", "to": "Linux", "time": "2026-03-26T04:23:49.246110", "old_ttl": 255, "new_ttl": 64}}
-{"time": "2026-03-26T04:23:58.094648", "mac": "52:55:0a:00:02:02", "anomaly_type": "device_type_change", "details": {"from": "Linux", "to": "Router", "time": "2026-03-26T04:23:58.094223", "old_ttl": 64, "new_ttl": 255}}
-{"time": "2026-03-26T04:23:58.149985", "mac": "52:55:0a:00:02:02", "anomaly_type": "device_type_change", "details": {"from": "Router", "to": "Linux", "time": "2026-03-26T04:23:58.149831", "old_ttl": 255, "new_ttl": 64}}
-{"time": "2026-03-26T04:25:44.157366", "mac": "52:55:0a:00:02:02", "anomaly_type": "device_type_change", "details": {"from": "Linux", "to": "Router", "time": "2026-03-26T04:25:44.157191", "old_ttl": 64, "new_ttl": 255}}
-{"time": "2026-03-26T04:25:44.592010", "mac": "52:55:0a:00:02:02", "anomaly_type": "device_type_change", "details": {"from": "Router", "to": "Linux", "time": "2026-03-26T04:25:44.591813", "old_ttl": 255, "new_ttl": 64}}
