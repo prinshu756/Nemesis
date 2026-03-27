@@ -26,7 +26,7 @@ class AgentAlpha:
                 return iface
         return "eth0"
 
-    def __init__(self, interface='wlan0'):
+    def __init__(self, interface=scapy.conf.iface):
         self.interface = interface
         self.devices = {}
         self.running = True

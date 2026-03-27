@@ -1,6 +1,9 @@
 import socket, struct, subprocess, os
+from system.firewall import isolate_device
+
 
 class AgentGamma:
+    
     def __init__(self, interface="eth0"):
         self.interface = interface
         self.blocked_ips_map = {}
@@ -14,6 +17,15 @@ class AgentGamma:
         self._try_load_ebpf()
 
         print("[+] Gamma Loaded with MAC filtering")
+
+    def isolate_device(self, mac):
+        # You should map MAC → IP
+        ip = self.get_ip_from_mac(mac)
+        isolate_device(ip)
+
+    def get_ip_from_mac(self, mac):
+        # Placeholder (use ARP table
+        return "192.168.1.100"
 
     def _ensure_compiled(self):
         """Ensure gamma_ebpf.o exists."""

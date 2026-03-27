@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+scapy
+faiss-cpu
+numpy
+sentence-transformers
+websockets
+docker
+pyyaml
+requests
