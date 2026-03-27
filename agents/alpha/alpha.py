@@ -26,7 +26,7 @@ class AgentAlpha:
                 return iface
         return "eth0"
 
-    def __init__(self, interface='wlan0'):
+    def __init__(self, interface=scapy.conf.iface):
         self.interface = interface
         self.devices = {}
         self.running = True
@@ -399,6 +399,12 @@ class AgentAlpha:
                 store=0,
                 filter="arp or ip"
             )
+        except PermissionError as e:
+            print(f"[!] Packet capture failed: {e}")
+            print("[!] Cannot start network monitoring - requires root privileges")
+            print("[!] Agent Alpha will operate in passive mode")
+            # Continue running without packet capture
+            # The agent can still be used for other functions
         except Exception as e:
             print(f"[!] Packet capture failed: {e}")
             print("[!] Cannot start network monitoring")

@@ -1,0 +1,30 @@
+network:
+  interface: "eth0"
+  monitor_mode: true
+
+ai:
+  model: "all-MiniLM-L6-v2"
+  ollama_url: "http://localhost:11434"
+  use_local_ai: false
+
+risk_thresholds:
+  high: 80
+  medium: 50
+  low: 20
+
+honeypot:
+  enabled: true
+  images:
+    - "cowrie/cowrie:latest"
+    - "dionaea:latest"
+  auto_deploy: true
+
+ebpf:
+  enabled: true
+  auto_compile: true
+
+logging:
+  level: "INFO"
+  file: "logs/nemesis.log"
+  max_size: 10485760
+  backup_count: 5

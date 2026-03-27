@@ -4,7 +4,7 @@ class MicroSegmentation:
 
     def isolate_device(self, mac):
         #Block everything from device
-        self.gamma.block_mac(mac)
+        self.gamma.isolate_device(mac)
 
     def allow_services(self, mac, allowed_ips):
         #Allow only specific services (e.g., Netflix
