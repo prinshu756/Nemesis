@@ -18,13 +18,44 @@ class AgentGamma:
 
         print("[+] Gamma Loaded with MAC filtering")
 
-    def isolate_device(self, mac):
-        # You should map MAC → IP
+    def isolate_device(self, mac, policy="full_isolation"):
+        """Isolate device with specified policy"""
+        # Map MAC → IP via ARP table
         ip = self.get_ip_from_mac(mac)
-        isolate_device(ip)
+        
+        # Apply isolation based on policy
+        if policy == "full_isolation":
+            self.block_mac(mac)
+            self.block_ip(ip)
+            print(f"[+] Full isolation applied to {mac} ({ip})")
+        elif policy == "limited_services":
+            self.allow_ip_for_mac(mac, "8.8.8.8")
+            print(f"[+] Limited services isolation applied to {mac} ({ip})")
+        elif policy == "lateral_block":
+            print(f"[+] Lateral movement blocked for {mac} ({ip})")
+            self.block_ip_for_mac(mac, "192.168.0.0/16")
+        
+        return True
 
     def get_ip_from_mac(self, mac):
-        # Placeholder (use ARP table
+        """Get IP address for MAC address via ARP table"""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['arp', '-n', mac],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout:
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    if mac.lower() in line.lower():
+                        parts = line.split()
+                        if len(parts) > 1:
+                            return parts[0]
+        except Exception as e:
+            print(f"[!] ARP lookup failed: {e}")
         return "192.168.1.100"
 
     def _ensure_compiled(self):
@@ -127,3 +158,15 @@ class AgentGamma:
                 print(f"[!] Cleanup failed: {e}")
         else:
             print("[+] No XDP to detach (local tracking only)")
+
+    def get_segmentation_status(self):
+        """Get current segmentation and isolation status"""
+        return {
+            'interface': self.interface,
+            'ebpf_attached': self.ebpf_attached,
+            'blocked_ips': len(self.blocked_ips_map),
+            'blocked_macs': len(self.blocked_macs_map),
+            'policies': {
+                'lateral_movement_prevention': len(getattr(self, 'blocked_services_map', {}))
+            }
+        }

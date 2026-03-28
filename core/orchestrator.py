@@ -1,17 +1,23 @@
 import asyncio
+from datetime import datetime, timedelta
 from core.state_manager import StateManager
 from core.risk_engine import RiskEngine
 from core.policy_engine import PolicyEngine
 from core.logging_config import logger
 from core.config import config
+from core.database import db_manager, Device, Alert, TrafficLog, HoneypotInteraction, SystemMetric
 
-from agents.alpha import AgentAlpha
+from agents.alpha.alpha import AgentAlpha
 from agents.beta import AgentBeta
-from agents.gamma import AgentGamma
+from agents.gamma.gamma import AgentGamma
 
 class NemesisOrchestrator:
     def __init__(self):
         logger.info("Initializing Nemesis Orchestrator...")
+
+        # Initialize database
+        db_manager.init_database()
+        self.db_session = db_manager.get_session()
 
         # Lazy initialization - agents will be initialized when first accessed
         self._alpha = None
@@ -23,8 +29,6 @@ class NemesisOrchestrator:
         self.policy = PolicyEngine()
 
         self.running = True
-        self.alerts = []
-        self.response_actions = []
 
         logger.info("Nemesis Orchestrator initialized successfully")
 
@@ -147,12 +151,7 @@ class NemesisOrchestrator:
                 if self.gamma:
                     policy = self._select_isolation_policy(device)
                     self.gamma.isolate_device(mac, policy)
-                    self.response_actions.append({
-                        'timestamp': asyncio.get_event_loop().time(),
-                        'mac': mac,
-                        'action': 'isolate',
-                        'policy': policy
-                    })
+                    logger.info(f"Isolation executed for {mac} with policy {policy}")
                 else:
                     logger.warning("Agent Gamma not available for isolation")
 
@@ -161,13 +160,13 @@ class NemesisOrchestrator:
                     threat_type = self._classify_threat(device)
                     container = self.beta.deploy_honeypot(device.get('ip'), threat_type)
                     if container:
-                        self.response_actions.append({
-                            'timestamp': asyncio.get_event_loop().time(),
-                            'mac': mac,
-                            'action': 'honeypot',
-                            'container': container,
-                            'threat_type': threat_type
-                        })
+                        logger.info(f"Honeypot deployed for {device.get('ip')} ({threat_type})")
+                        # Store honeypot interaction
+                        self.store_honeypot_interaction(
+                            device.get('ip'),
+                            threat_type,
+                            threat_type
+                        )
                 else:
                     logger.warning("Agent Beta not available for honeypot deployment")
 
@@ -220,35 +219,47 @@ class NemesisOrchestrator:
         return alerts
 
     def _add_alert(self, alert):
-        """Add alert to the system"""
-        alert['timestamp'] = asyncio.get_event_loop().time()
-        self.alerts.append(alert)
-        self.state.add_alert(alert)
-
-        # Keep only recent alerts
-        if len(self.alerts) > 100:
-            self.alerts = self.alerts[-100:]
-
-        logger.warning(f"Alert: {alert['message']}")
+        """Add alert to the system and database"""
+        try:
+            # Store to database
+            db_alert = Alert(
+                level=alert.get('level', 'warning'),
+                message=alert.get('message', ''),
+                device_mac=alert.get('device', {}).get('mac'),
+                risk_score=alert.get('risk_score'),
+                details=alert
+            )
+            self.db_session.add(db_alert)
+            self.db_session.commit()
+            
+            # Also add to state for real-time access
+            self.state.add_alert(alert)
+            logger.warning(f"Alert: {alert.get('message', 'Unknown')}")
+            
+        except Exception as e:
+            logger.error(f"Failed to store alert: {e}")
+            self.db_session.rollback()
 
     async def _cleanup_expired_policies(self):
         """Clean up expired policies and honeypots"""
-        current_time = asyncio.get_event_loop().time()
+        try:
+            # Only cleanup if Alpha is initialized
+            if not self.alpha or not self.alpha.devices:
+                return
+                
+            # Clean up honeypots for inactive IPs
+            active_ips = {device.get('ip') for device in self.alpha.devices.values() if device.get('ip')}
+            
+            # Only cleanup if Beta is initialized
+            if self.beta:
+                honeypots = self.beta.get_active_honeypots()
+                for ip in honeypots:
+                    if ip not in active_ips:
+                        self.beta.cleanup_honeypot(ip)
+                        logger.info(f"Cleaned up honeypot for inactive IP: {ip}")
 
-        # Clean up old response actions (older than 1 hour)
-        self.response_actions = [
-            action for action in self.response_actions
-            if current_time - action['timestamp'] < 3600
-        ]
-
-        # Clean up honeypots for inactive IPs
-        active_ips = {device.get('ip') for device in self.alpha.devices.values() if device.get('ip')}
-        honeypots = self.beta.get_active_honeypots()
-
-        for ip in honeypots:
-            if ip not in active_ips:
-                self.beta.cleanup_honeypot(ip)
-                logger.info(f"Cleaned up honeypot for inactive IP: {ip}")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
     def _run_alpha_capture(self):
         """Run Alpha's packet capture (blocking)"""
@@ -282,17 +293,144 @@ class NemesisOrchestrator:
 
     def get_status(self):
         """Get comprehensive system status"""
-        status = {
-            'alpha_devices': len(self.alpha.devices) if self.alpha else 0,
-            'beta_honeypots': len(self.beta.get_active_honeypots()) if self.beta else 0,
-            'gamma_policies': self.gamma.get_segmentation_status() if self.gamma else {'policies': {}, 'ebpf_attached': False},
-            'alerts_count': len(self.alerts),
-            'response_actions_count': len(self.response_actions),
-            'system_running': self.running,
-            'agents_status': {
-                'alpha': self.alpha is not None,
-                'beta': self.beta is not None,
-                'gamma': self.gamma is not None
+        try:
+            # Count database entries
+            device_count = self.db_session.query(Device).count()
+            alert_count = self.db_session.query(Alert).count()
+            traffic_count = self.db_session.query(TrafficLog).count()
+            honeypot_count = self.db_session.query(HoneypotInteraction).count()
+            
+            status = {
+                'alpha_devices': len(self.alpha.devices) if self.alpha else 0,
+                'beta_honeypots': len(self.beta.get_active_honeypots()) if self.beta else 0,
+                'gamma_policies': self.gamma.get_segmentation_status() if self.gamma else {'policies': {}, 'ebpf_attached': False},
+                'database': {
+                    'devices': device_count,
+                    'alerts': alert_count,
+                    'traffic_logs': traffic_count,
+                    'honeypot_interactions': honeypot_count
+                },
+                'system_running': self.running,
+                'agents_status': {
+                    'alpha': self.alpha is not None,
+                    'beta': self.beta is not None,
+                    'gamma': self.gamma is not None
+                }
             }
-        }
-        return status
+            return status
+        except Exception as e:
+            logger.error(f"Error getting status: {e}")
+            return {'error': str(e), 'system_running': self.running}
+
+    def store_device_data(self, mac, device_info):
+        """Store device information in database"""
+        try:
+            device = self.db_session.query(Device).filter_by(mac_address=mac).first()
+            
+            if device:
+                device.ip_address = device_info.get('ip')
+                device.hostname = device_info.get('hostname')
+                device.device_type = device_info.get('device_type')
+                device.os_fingerprint = device_info.get('os_fingerprint')
+                device.vendor = device_info.get('vendor')
+                device.packet_count = device_info.get('packet_count', 0)
+                device.risk_score = device_info.get('risk_score', 0)
+                device.ports = device_info.get('ports', {})
+                device.services = device_info.get('services', {})
+            else:
+                device = Device(
+                    mac_address=mac,
+                    ip_address=device_info.get('ip'),
+                    hostname=device_info.get('hostname'),
+                    device_type=device_info.get('device_type'),
+                    os_fingerprint=device_info.get('os_fingerprint'),
+                    vendor=device_info.get('vendor'),
+                    packet_count=device_info.get('packet_count', 0),
+                    risk_score=device_info.get('risk_score', 0),
+                    ports=device_info.get('ports', {}),
+                    services=device_info.get('services', {})
+                )
+                self.db_session.add(device)
+            
+            self.db_session.commit()
+            
+        except Exception as e:
+            logger.error(f"Error storing device data: {e}")
+            self.db_session.rollback()
+
+    def store_traffic_log(self, src_ip, dst_ip, src_port, dst_port, protocol, packet_size=0, flags=''):
+        """Store network traffic in database"""
+        try:
+            traffic = TrafficLog(
+                source_ip=src_ip,
+                src_ip=src_ip,
+                destination_ip=dst_ip,
+                dst_ip=dst_ip,
+                source_port=src_port,
+                src_port=src_port,
+                destination_port=dst_port,
+                dst_port=dst_port,
+                protocol=protocol,
+                packet_size=packet_size,
+                flags=flags
+            )
+            self.db_session.add(traffic)
+            self.db_session.commit()
+            
+        except Exception as e:
+            logger.error(f"Error storing traffic log: {e}")
+            self.db_session.rollback()
+
+    def store_honeypot_interaction(self, ip, honeypot_type, threat_type, attack_payload=''):
+        """Store honeypot detection event in database"""
+        try:
+            interaction = HoneypotInteraction(
+                ip_address=ip,
+                src_ip=ip,
+                honeypot_type=honeypot_type,
+                threat_type=threat_type,
+                attack_type=threat_type,
+                payload=attack_payload,
+                event_type='detection',
+                interaction_type='detected'
+            )
+            self.db_session.add(interaction)
+            self.db_session.commit()
+            logger.info(f"Stored honeypot interaction: {threat_type} from {ip}")
+            
+        except Exception as e:
+            logger.error(f"Error storing honeypot interaction: {e}")
+            self.db_session.rollback()
+
+    def store_system_metric(self, metric_type, metric_name, value, unit=''):
+        """Store system metric in database"""
+        try:
+            metric = SystemMetric(
+                metric_type=metric_type,
+                metric_name=metric_name,
+                value=value,
+                unit=unit
+            )
+            self.db_session.add(metric)
+            self.db_session.commit()
+            
+        except Exception as e:
+            logger.error(f"Error storing system metric: {e}")
+            self.db_session.rollback()
+
+    def get_recent_alerts(self, limit=50):
+        """Get recent alerts from database"""
+        try:
+            alerts = self.db_session.query(Alert).order_by(Alert.timestamp.desc()).limit(limit).all()
+            return [{
+                'id': alert.id,
+                'level': alert.level,
+                'message': alert.message,
+                'device_mac': alert.device_mac,
+                'risk_score': alert.risk_score,
+                'timestamp': alert.timestamp.isoformat() if alert.timestamp else None,
+                'details': alert.details
+            } for alert in alerts]
+        except Exception as e:
+            logger.error(f"Error getting alerts: {e}")
+            return []

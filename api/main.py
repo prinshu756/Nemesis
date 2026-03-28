@@ -99,10 +99,11 @@ async def device_detail(mac: str):
 
 @app.get("/alerts")
 async def alerts():
-    """Get recent alerts"""
+    """Get recent alerts from database"""
     try:
         orchestrator = await get_orchestrator()
-        return {"alerts": orchestrator.state.alerts[-50:]}  # Last 50 alerts
+        alerts = orchestrator.get_recent_alerts(limit=50)
+        return {"alerts": alerts}
     except Exception as e:
         logger.error(f"Error fetching alerts: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch alerts")
@@ -196,6 +197,84 @@ async def get_policies():
     except Exception as e:
         logger.error(f"Error fetching policies: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch policies")
+
+@app.get("/traffic")
+async def get_traffic_logs(limit: int = 100):
+    """Get recent network traffic logs from database"""
+    try:
+        from core.database import db_manager, TrafficLog
+        orchestrator = await get_orchestrator()
+        session = db_manager.get_session()
+        
+        traffic_logs = session.query(TrafficLog).order_by(TrafficLog.timestamp.desc()).limit(limit).all()
+        db_manager.close_session(session)
+        
+        return {
+            "traffic_logs": [{
+                'id': log.id,
+                'source_ip': log.source_ip,
+                'destination_ip': log.destination_ip,
+                'source_port': log.source_port,
+                'destination_port': log.destination_port,
+                'protocol': log.protocol,
+                'packet_size': log.packet_size,
+                'timestamp': log.timestamp.isoformat() if log.timestamp else None
+            } for log in traffic_logs]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching traffic logs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch traffic logs")
+
+@app.get("/honeypots/detection")
+async def get_honeypot_detection(limit: int = 100):
+    """Get honeypot detection events from database"""
+    try:
+        from core.database import db_manager, HoneypotInteraction
+        orchestrator = await get_orchestrator()
+        session = db_manager.get_session()
+        
+        detections = session.query(HoneypotInteraction).order_by(HoneypotInteraction.timestamp.desc()).limit(limit).all()
+        db_manager.close_session(session)
+        
+        return {
+            "honeypot_detections": [{
+                'id': det.id,
+                'ip_address': det.ip_address,
+                'threat_type': det.threat_type,
+                'attack_type': det.attack_type,
+                'honeypot_type': det.honeypot_type,
+                'timestamp': det.timestamp.isoformat() if det.timestamp else None,
+                'severity': det.severity
+            } for det in detections]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching honeypot detections: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch honeypot detections")
+
+@app.get("/anomalies")
+async def get_anomalies(limit: int = 100):
+    """Get detected anomalies"""
+    try:
+        from core.database import db_manager, Alert
+        orchestrator = await get_orchestrator()
+        session = db_manager.get_session()
+        
+        anomalies = session.query(Alert).filter(Alert.alert_type.in_(['anomaly', 'high_traffic'])).order_by(Alert.timestamp.desc()).limit(limit).all()
+        db_manager.close_session(session)
+        
+        return {
+            "anomalies": [{
+                'id': anom.id,
+                'message': anom.message,
+                'device_mac': anom.device_mac,
+                'severity': anom.severity,
+                'timestamp': anom.timestamp.isoformat() if anom.timestamp else None,
+                'status': anom.status
+            } for anom in anomalies]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching anomalies: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch anomalies")
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
