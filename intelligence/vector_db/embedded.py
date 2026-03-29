@@ -11,11 +11,11 @@ def embed(text: str):
     """Embed text for vector database"""
     try:
         try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            return model.encode(text)
+            import ollama
+            response = ollama.embeddings(model='smollm:360m', prompt=text)
+            return response['embedding']
         except Exception as e:
-            logger.warning(f"Sentence transformer failed: {e}, using fallback")
+            logger.warning(f"Ollama embedding failed: {e}, using fallback")
             # Fallback: simple hash-based embedding
             import hashlib
             hash_val = hashlib.sha256(text.encode()).hexdigest()
