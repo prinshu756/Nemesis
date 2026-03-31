@@ -1,337 +1,314 @@
-from fastapi import FastAPI, WebSocket, HTTPException
+"""
+N.E.M.E.S.I.S API Server
+FastAPI backend with REST endpoints, WebSocket streaming, and simulation engine integration.
+"""
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 import asyncio
-from core.orchestrator import NemesisOrchestrator
-from core.logging_config import logger
-from core.config import config
-import uvicorn
+import time
+
+from simulation.engine import SimulationEngine
+from simulation.event_bus import event_bus, STATE_MONITORING, STATE_ALERT, STATE_DEFENSE, STATE_LOCKDOWN
+from api.ws_manager import ws_manager
 
 app = FastAPI(
-    title="Nemesis Network Security API",
-    description="AI-powered network threat detection and response system",
-    version="2.0.0"
+    title="N.E.M.E.S.I.S",
+    description="Neural Edge-based Mimicry & Entrapment System for IoT Security",
+    version="4.2.0",
 )
 
-# Add CORS middleware for frontend integration
+# CORS for frontend dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Lazy initialization of orchestrator
-orch = None
+# Global simulation engine
+sim_engine: Optional[SimulationEngine] = None
 
-async def get_orchestrator():
-    """Get or initialize the orchestrator"""
-    global orch
-    if orch is None:
-        logger.info("Initializing orchestrator...")
-        orch = NemesisOrchestrator()
-        logger.info("Orchestrator initialized")
-    return orch
+
+# ─── REQUEST MODELS ──────────────────────────────────────────────────────
+
+class IsolateRequest(BaseModel):
+    mac: str
+    policy: str = "full_isolation"
+
+class HoneypotRequest(BaseModel):
+    target_ip: str
+    pot_type: str = "generic"
+
+class StateChangeRequest(BaseModel):
+    state: str
+
+class SpeedChangeRequest(BaseModel):
+    mode: Optional[str] = None
+    custom_value: Optional[float] = None
+
+
+# ─── LIFECYCLE ───────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup():
-    """Initialize the system on startup"""
-    logger.info("Starting Nemesis API server")
-    orchestrator = await get_orchestrator()
-    asyncio.create_task(orchestrator.run())
+    """Initialize and start the simulation engine."""
+    global sim_engine
+    print("=" * 60)
+    print("  N.E.M.E.S.I.S v4.2 — SYSTEM INITIALIZING")
+    print("=" * 60)
+    sim_engine = SimulationEngine(speed_mode="demo")
+    await sim_engine.start()
+    print("[✓] Simulation engine started in DEMO mode")
+    print("[✓] Event bus active")
+    print("[✓] All agents online")
+    print("=" * 60)
+
 
 @app.on_event("shutdown")
 async def shutdown():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down Nemesis API server")
-    # Emergency cleanup would happen in orchestrator
+    """Stop the simulation engine."""
+    global sim_engine
+    if sim_engine:
+        sim_engine.stop()
+    print("[✓] N.E.M.E.S.I.S shutdown complete")
+
+
+# ─── ROOT ────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    """API root endpoint"""
     return {
-        "message": "Nemesis Network Security System API",
-        "version": "2.0.0",
-        "status": "active"
+        "system": "N.E.M.E.S.I.S",
+        "version": "4.2.0",
+        "codename": "Neural Edge-based Mimicry & Entrapment System for IoT Security",
+        "status": "OPERATIONAL",
+        "timestamp": time.time(),
     }
 
-@app.get("/devices")
-async def devices():
-    """Get all discovered devices"""
-    try:
-        orchestrator = await get_orchestrator()
-        devices = []
-        for mac, device in orchestrator.state.devices.items():
-            # Add computed risk score
-            risk_score = orchestrator.risk_engine.compute_risk(device)
-            device_copy = device.copy()
-            device_copy['risk_score'] = risk_score
-            device_copy['mac'] = mac
-            devices.append(device_copy)
 
-        return {"devices": devices, "count": len(devices)}
-    except Exception as e:
-        logger.error(f"Error fetching devices: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch devices")
+# ─── DEVICE ENDPOINTS ───────────────────────────────────────────────────
+
+@app.get("/devices")
+async def get_devices():
+    """Get all discovered devices."""
+    devices = sim_engine.get_all_devices()
+    return {
+        "devices": devices,
+        "count": len(devices),
+        "timestamp": time.time(),
+    }
+
 
 @app.get("/devices/{mac}")
-async def device_detail(mac: str):
-    """Get detailed information about a specific device"""
-    try:
-        orchestrator = await get_orchestrator()
-        if mac not in orchestrator.state.devices:
-            raise HTTPException(status_code=404, detail="Device not found")
+async def get_device(mac: str):
+    """Get a specific device by MAC address."""
+    device = sim_engine.get_device(mac)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"device": device}
 
-        device = orchestrator.state.devices[mac]
-        risk_score = orchestrator.risk_engine.compute_risk(device)
 
-        return {
-            "mac": mac,
-            "device": device,
-            "risk_score": risk_score,
-            "risk_level": _get_risk_level(risk_score)
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching device {mac}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch device")
+# ─── ALERT ENDPOINTS ────────────────────────────────────────────────────
 
 @app.get("/alerts")
-async def alerts():
-    """Get recent alerts from database"""
-    try:
-        orchestrator = await get_orchestrator()
-        alerts = orchestrator.get_recent_alerts(limit=50)
-        return {"alerts": alerts}
-    except Exception as e:
-        logger.error(f"Error fetching alerts: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch alerts")
+async def get_alerts(limit: int = Query(50, ge=1, le=500)):
+    """Get recent alerts from event history."""
+    from simulation.event_bus import EVENT_ALERT_CREATED
+    alerts = event_bus.get_history(EVENT_ALERT_CREATED, limit=limit)
+    return {"alerts": alerts, "count": len(alerts)}
 
-@app.get("/status")
-async def system_status():
-    """Get comprehensive system status"""
-    try:
-        orchestrator = await get_orchestrator()
-        status = orchestrator.get_status()
-        status.update({
-            "uptime": "N/A",  # Could be enhanced with actual uptime tracking
-            "config": {
-                "interface": config.get('network.interface'),
-                "ebpf_enabled": config.get('ebpf.enabled'),
-                "ai_enabled": config.get('ai.use_local_ai')
-            }
-        })
-        return status
-    except Exception as e:
-        logger.error(f"Error fetching system status: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch system status")
 
-@app.post("/devices/{mac}/isolate")
-async def isolate_device(mac: str, policy: str = "full_isolation"):
-    """Manually isolate a device"""
-    try:
-        orchestrator = await get_orchestrator()
-        if mac not in orchestrator.state.devices:
-            raise HTTPException(status_code=404, detail="Device not found")
+# ─── NETWORK MAP ─────────────────────────────────────────────────────────
 
-        orchestrator.gamma.isolate_device(mac, policy)
+@app.get("/network-map")
+async def get_network_map():
+    """Get current network topology."""
+    from simulation.event_bus import EVENT_NETWORK_MAP_UPDATE
+    maps = event_bus.get_history(EVENT_NETWORK_MAP_UPDATE, limit=1)
+    if maps:
+        return maps[-1]["payload"]
+    return {"devices": [], "connections": []}
 
-        return {
-            "message": f"Device {mac} isolated with policy: {policy}",
-            "policy": policy
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error isolating device {mac}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to isolate device")
 
-@app.post("/devices/{mac}/honeypot")
-async def deploy_honeypot(mac: str):
-    """Deploy honeypot for a device"""
-    try:
-        orchestrator = await get_orchestrator()
-        if mac not in orchestrator.state.devices:
-            raise HTTPException(status_code=404, detail="Device not found")
+# ─── LOG ENDPOINTS ───────────────────────────────────────────────────────
 
-        device = orchestrator.state.devices[mac]
-        ip = device.get('ip')
-        if not ip:
-            raise HTTPException(status_code=400, detail="Device has no IP address")
+@app.get("/logs")
+async def get_logs(limit: int = Query(100, ge=1, le=1000)):
+    """Get recent system logs."""
+    from simulation.event_bus import EVENT_LOG_ENTRY
+    logs = event_bus.get_history(EVENT_LOG_ENTRY, limit=limit)
+    return {"logs": logs, "count": len(logs)}
 
-        threat_type = "generic"  # Could be enhanced with threat classification
-        container = orchestrator.beta.deploy_honeypot(ip, threat_type)
 
-        if container:
-            return {
-                "message": f"Honeypot deployed for {mac} ({ip})",
-                "container": container,
-                "threat_type": threat_type
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to deploy honeypot")
+# ─── THREAT ENDPOINTS ───────────────────────────────────────────────────
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deploying honeypot for {mac}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to deploy honeypot")
+@app.get("/threats")
+async def get_threats():
+    """Get active and historical threats."""
+    active = sim_engine.attack_simulator.get_active_attacks()
+    history = sim_engine.attack_simulator.get_attack_history(limit=50)
+    return {
+        "active": active,
+        "history": history,
+        "active_count": len(active),
+        "total_count": len(history),
+    }
+
+
+# ─── HONEYPOT ENDPOINTS ─────────────────────────────────────────────────
 
 @app.get("/honeypots")
 async def get_honeypots():
-    """Get active honeypots"""
-    try:
-        orchestrator = await get_orchestrator()
-        return {"honeypots": orchestrator.beta.get_active_honeypots()}
-    except Exception as e:
-        logger.error(f"Error fetching honeypots: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch honeypots")
+    """Get all honeypots."""
+    honeypots = list(sim_engine.agent_beta.honeypots.values())
+    return {
+        "honeypots": honeypots,
+        "active": len([h for h in honeypots if h["status"] == "active"]),
+        "total": len(honeypots),
+    }
 
-@app.get("/policies")
-async def get_policies():
-    """Get current segmentation policies"""
-    try:
-        orchestrator = await get_orchestrator()
-        return {"policies": orchestrator.gamma.get_segmentation_status()}
-    except Exception as e:
-        logger.error(f"Error fetching policies: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch policies")
 
-@app.get("/traffic")
-async def get_traffic_logs(limit: int = 100):
-    """Get recent network traffic logs from database"""
-    try:
-        from core.database import db_manager, TrafficLog
-        orchestrator = await get_orchestrator()
-        session = db_manager.get_session()
-        
-        traffic_logs = session.query(TrafficLog).order_by(TrafficLog.timestamp.desc()).limit(limit).all()
-        db_manager.close_session(session)
-        
-        return {
-            "traffic_logs": [{
-                'id': log.id,
-                'source_ip': log.source_ip,
-                'destination_ip': log.destination_ip,
-                'source_port': log.source_port,
-                'destination_port': log.destination_port,
-                'protocol': log.protocol,
-                'packet_size': log.packet_size,
-                'timestamp': log.timestamp.isoformat() if log.timestamp else None
-            } for log in traffic_logs]
-        }
-    except Exception as e:
-        logger.error(f"Error fetching traffic logs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch traffic logs")
+# ─── AGENT STATUS ───────────────────────────────────────────────────────
 
-@app.get("/honeypots/detection")
-async def get_honeypot_detection(limit: int = 100):
-    """Get honeypot detection events from database"""
-    try:
-        from core.database import db_manager, HoneypotInteraction
-        orchestrator = await get_orchestrator()
-        session = db_manager.get_session()
-        
-        detections = session.query(HoneypotInteraction).order_by(HoneypotInteraction.timestamp.desc()).limit(limit).all()
-        db_manager.close_session(session)
-        
-        return {
-            "honeypot_detections": [{
-                'id': det.id,
-                'ip_address': det.ip_address,
-                'threat_type': det.threat_type,
-                'attack_type': det.attack_type,
-                'honeypot_type': det.honeypot_type,
-                'timestamp': det.timestamp.isoformat() if det.timestamp else None,
-                'severity': det.severity
-            } for det in detections]
-        }
-    except Exception as e:
-        logger.error(f"Error fetching honeypot detections: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch honeypot detections")
+@app.get("/agents/status")
+async def get_agent_status():
+    """Get status of all three agents."""
+    return {
+        "alpha": sim_engine.agent_alpha.get_status(),
+        "beta": sim_engine.agent_beta.get_status(),
+        "gamma": sim_engine.agent_gamma.get_status(),
+    }
 
-@app.get("/anomalies")
-async def get_anomalies(limit: int = 100):
-    """Get detected anomalies"""
-    try:
-        from core.database import db_manager, Alert
-        orchestrator = await get_orchestrator()
-        session = db_manager.get_session()
-        
-        anomalies = session.query(Alert).filter(Alert.alert_type.in_(['anomaly', 'high_traffic'])).order_by(Alert.timestamp.desc()).limit(limit).all()
-        db_manager.close_session(session)
-        
-        return {
-            "anomalies": [{
-                'id': anom.id,
-                'message': anom.message,
-                'device_mac': anom.device_mac,
-                'severity': anom.severity,
-                'timestamp': anom.timestamp.isoformat() if anom.timestamp else None,
-                'status': anom.status
-            } for anom in anomalies]
-        }
-    except Exception as e:
-        logger.error(f"Error fetching anomalies: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch anomalies")
+
+# ─── METRICS ─────────────────────────────────────────────────────────────
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get latest system metrics."""
+    from simulation.event_bus import EVENT_METRIC_UPDATE
+    metrics = event_bus.get_history(EVENT_METRIC_UPDATE, limit=1)
+    if metrics:
+        return metrics[-1]["payload"]
+    return {}
+
+
+# ─── SYSTEM STATUS ───────────────────────────────────────────────────────
+
+@app.get("/status")
+async def get_status():
+    """Get comprehensive system status."""
+    return sim_engine.get_full_status()
+
+
+# ─── COMMAND ENDPOINTS (USER-TRIGGERED ACTIONS) ─────────────────────────
+
+@app.post("/command/isolate")
+async def cmd_isolate(req: IsolateRequest):
+    """Isolate a device by MAC address."""
+    result = await sim_engine.command_isolate(req.mac)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed"))
+    return result
+
+
+@app.post("/command/release")
+async def cmd_release(req: IsolateRequest):
+    """Release a device from isolation."""
+    result = await sim_engine.command_release(req.mac)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed"))
+    return result
+
+
+@app.post("/command/honeypot")
+async def cmd_honeypot(req: HoneypotRequest):
+    """Deploy a honeypot."""
+    result = await sim_engine.command_deploy_honeypot(req.target_ip, req.pot_type)
+    return result
+
+
+@app.post("/command/state")
+async def cmd_state(req: StateChangeRequest):
+    """Change system operational state."""
+    result = await sim_engine.command_set_state(req.state)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed"))
+    return result
+
+
+@app.post("/command/speed")
+async def cmd_speed(req: SpeedChangeRequest):
+    """Change simulation speed."""
+    sim_engine.set_speed(mode=req.mode, custom_value=req.custom_value)
+    return {
+        "success": True,
+        "speed_mode": sim_engine.speed_mode,
+        "speed_multiplier": sim_engine.speed_multiplier,
+    }
+
+
+# ─── WEBSOCKET ───────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
-async def ws(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates"""
-    await websocket.accept()
-    logger.info("WebSocket connection established")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time event streaming."""
+    await ws_manager.connect(websocket)
 
     try:
-        orchestrator = await get_orchestrator()
+        # Send initial state snapshot
+        await ws_manager.send_personal(websocket, {
+            "type": "initial_state",
+            "payload": {
+                "devices": sim_engine.get_all_devices(),
+                "status": sim_engine.get_full_status(),
+                "system_state": event_bus.system_state,
+            },
+            "timestamp": time.time(),
+        })
+
+        # Keep connection alive and listen for commands
         while True:
-            # Send current state
-            data = {
-                "devices": _prepare_devices_data(orchestrator),
-                "alerts": orchestrator.state.alerts[-20:],  # Last 20 alerts
-                "status": orchestrator.get_status(),
-                "timestamp": asyncio.get_event_loop().time()
-            }
+            try:
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=30)
+                # Process incoming commands via WebSocket
+                cmd = data.get("command")
+                if cmd == "isolate":
+                    result = await sim_engine.command_isolate(data.get("mac", ""))
+                    await ws_manager.send_personal(websocket, {"type": "command_result", "payload": result})
+                elif cmd == "release":
+                    result = await sim_engine.command_release(data.get("mac", ""))
+                    await ws_manager.send_personal(websocket, {"type": "command_result", "payload": result})
+                elif cmd == "honeypot":
+                    result = await sim_engine.command_deploy_honeypot(data.get("target_ip", ""), data.get("pot_type", "generic"))
+                    await ws_manager.send_personal(websocket, {"type": "command_result", "payload": result})
+                elif cmd == "set_state":
+                    result = await sim_engine.command_set_state(data.get("state", ""))
+                    await ws_manager.send_personal(websocket, {"type": "command_result", "payload": result})
+                elif cmd == "set_speed":
+                    sim_engine.set_speed(mode=data.get("mode"), custom_value=data.get("custom_value"))
+                    await ws_manager.send_personal(websocket, {"type": "command_result", "payload": {"success": True}})
+                elif cmd == "ping":
+                    await ws_manager.send_personal(websocket, {"type": "pong", "timestamp": time.time()})
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                try:
+                    await websocket.send_json({"type": "heartbeat", "timestamp": time.time()})
+                except Exception:
+                    break
 
-            await websocket.send_json(data)
-            await asyncio.sleep(1)  # Update every second
-
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-    finally:
-        logger.info("WebSocket connection closed")
+        print(f"[WS] Error: {e}")
+        ws_manager.disconnect(websocket)
 
-def _prepare_devices_data(orchestrator):
-    """Prepare device data for WebSocket transmission"""
-    devices = []
-    for mac, device in orchestrator.state.devices.items():
-        try:
-            risk_score = orchestrator.risk_engine.compute_risk(device)
-            device_copy = device.copy()
-            device_copy['mac'] = mac
-            device_copy['risk_score'] = risk_score
-            device_copy['risk_level'] = _get_risk_level(risk_score)
-            devices.append(device_copy)
-        except Exception as e:
-            logger.error(f"Error preparing device data for {mac}: {e}")
-    return devices
 
-def _get_risk_level(score):
-    """Convert risk score to risk level"""
-    if score >= 80:
-        return "critical"
-    elif score >= 50:
-        return "high"
-    elif score >= 20:
-        return "medium"
-    else:
-        return "low"
+# ─── MAIN ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "api.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    import uvicorn
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
