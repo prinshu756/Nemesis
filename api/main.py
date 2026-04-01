@@ -1,9 +1,11 @@
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+import os
 from core.orchestrator import NemesisOrchestrator
 from core.logging_config import logger
 from core.config import config
+from api.database_service import db_service
 import uvicorn
 
 app = FastAPI(
@@ -275,6 +277,372 @@ async def get_anomalies(limit: int = 100):
     except Exception as e:
         logger.error(f"Error fetching anomalies: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch anomalies")
+
+# ============= DATABASE PERSISTENCE ENDPOINTS =============
+
+@app.post("/db/devices")
+async def save_devices_to_db():
+    """Save all discovered devices to database"""
+    try:
+        orchestrator = await get_orchestrator()
+        saved_count = 0
+        
+        for mac, device in orchestrator.state.devices.items():
+            try:
+                risk_score = orchestrator.risk_engine.compute_risk(device)
+                device_data = {
+                    'mac': mac,
+                    'ip': device.get('ip'),
+                    'hostname': device.get('hostname'),
+                    'device_type': device.get('device_type', 'unknown'),
+                    'vendor': device.get('vendor', 'unknown'),
+                    'risk_score': risk_score,
+                    'risk_level': _get_risk_level(risk_score),
+                    'is_active': device.get('is_active', True),
+                    'os_fingerprint': device.get('os_fingerprint')
+                }
+                
+                if db_service.persist_device(device_data):
+                    saved_count += 1
+            except Exception as e:
+                logger.error(f"Error saving device {mac}: {e}")
+        
+        return {
+            "message": f"Saved {saved_count} devices to database",
+            "saved_count": saved_count,
+            "total_devices": len(orchestrator.state.devices)
+        }
+    except Exception as e:
+        logger.error(f"Error saving devices to database: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save devices to database")
+
+@app.post("/db/alerts")
+async def save_alerts_to_db():
+    """Save all alerts to database"""
+    try:
+        orchestrator = await get_orchestrator()
+        saved_count = 0
+        
+        for alert in orchestrator.state.alerts:
+            try:
+                alert_data = {
+                    'message': alert.get('message', 'No message'),
+                    'severity': alert.get('severity', 'medium'),
+                    'type': alert.get('type', 'generic'),
+                    'device_mac': alert.get('device_mac'),
+                    'details': alert.get('details', {})
+                }
+                
+                if db_service.persist_alert(alert_data):
+                    saved_count += 1
+            except Exception as e:
+                logger.error(f"Error saving alert: {e}")
+        
+        return {
+            "message": f"Saved {saved_count} alerts to database",
+            "saved_count": saved_count,
+            "total_alerts": len(orchestrator.state.alerts)
+        }
+    except Exception as e:
+        logger.error(f"Error saving alerts to database: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save alerts to database")
+
+@app.post("/db/device/{mac}")
+async def save_single_device_to_db(mac: str):
+    """Save a specific device to database"""
+    try:
+        orchestrator = await get_orchestrator()
+        if mac not in orchestrator.state.devices:
+            raise HTTPException(status_code=404, detail="Device not found")
+        
+        device = orchestrator.state.devices[mac]
+        risk_score = orchestrator.risk_engine.compute_risk(device)
+        device_data = {
+            'mac': mac,
+            'ip': device.get('ip'),
+            'hostname': device.get('hostname'),
+            'device_type': device.get('device_type', 'unknown'),
+            'vendor': device.get('vendor', 'unknown'),
+            'risk_score': risk_score,
+            'risk_level': _get_risk_level(risk_score),
+            'is_active': device.get('is_active', True),
+            'os_fingerprint': device.get('os_fingerprint')
+        }
+        
+        if db_service.persist_device(device_data):
+            return {
+                "message": f"Device {mac} saved to database",
+                "mac": mac,
+                "success": True
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save device")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving device {mac}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save device to database")
+
+@app.post("/db/alert")
+async def save_alert_to_db(alert_data: dict):
+    """Save a specific alert to database"""
+    try:
+        if db_service.persist_alert(alert_data):
+            return {
+                "message": "Alert saved to database",
+                "success": True,
+                "data": alert_data
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save alert")
+    except Exception as e:
+        logger.error(f"Error saving alert: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save alert to database")
+
+@app.post("/db/traffic")
+async def save_traffic_to_db(traffic_data: dict):
+    """Save traffic log to database"""
+    try:
+        if db_service.persist_traffic_log(traffic_data):
+            return {
+                "message": "Traffic log saved to database",
+                "success": True
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save traffic log")
+    except Exception as e:
+        logger.error(f"Error saving traffic log: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save traffic log to database")
+
+@app.post("/db/honeypot-interaction")
+async def save_honeypot_interaction_to_db(interaction_data: dict):
+    """Save honeypot interaction to database"""
+    try:
+        if db_service.persist_honeypot_interaction(interaction_data):
+            return {
+                "message": "Honeypot interaction saved to database",
+                "success": True
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save honeypot interaction")
+    except Exception as e:
+        logger.error(f"Error saving honeypot interaction: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save honeypot interaction to database")
+
+# ============= DATABASE RETRIEVAL ENDPOINTS =============
+
+@app.get("/db/devices")
+async def get_persisted_devices(limit: int = 100):
+    """Get all persisted devices from database"""
+    try:
+        devices = db_service.get_devices(limit)
+        return {
+            "devices": devices,
+            "count": len(devices),
+            "source": "database"
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving devices: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve devices from database")
+
+@app.get("/db/alerts")
+async def get_persisted_alerts(limit: int = 100):
+    """Get all persisted alerts from database"""
+    try:
+        alerts = db_service.get_alerts(limit)
+        return {
+            "alerts": alerts,
+            "count": len(alerts),
+            "source": "database"
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving alerts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve alerts from database")
+
+@app.get("/db/traffic")
+async def get_persisted_traffic(limit: int = 100):
+    """Get all persisted traffic logs from database"""
+    try:
+        logs = db_service.get_traffic_logs(limit)
+        return {
+            "traffic_logs": logs,
+            "count": len(logs),
+            "source": "database"
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving traffic logs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve traffic logs from database")
+
+@app.get("/db/honeypot-interactions")
+async def get_persisted_honeypot_interactions(limit: int = 100):
+    """Get all persisted honeypot interactions from database"""
+    try:
+        interactions = db_service.get_honeypot_interactions(limit)
+        return {
+            "honeypot_interactions": interactions,
+            "count": len(interactions),
+            "source": "database"
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving honeypot interactions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve honeypot interactions from database")
+
+@app.get("/db/status")
+async def get_database_status():
+    """Get database connectivity status"""
+    try:
+        local_status = "connected"
+        neon_status = "connected" if db_service.neon_db else "not_configured"
+        
+        return {
+            "local_db": {
+                "status": local_status,
+                "type": "SQLite",
+                "url": os.getenv('DATABASE_URL', 'sqlite:///./nemesis.db')
+            },
+            "neon_db": {
+                "status": neon_status,
+                "type": "PostgreSQL",
+                "url": "***configured***" if os.getenv('NEON_DATABASE_URL') else "not_configured"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting database status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get database status")
+
+@app.get("/backend/status")
+async def get_comprehensive_backend_status():
+    """Get comprehensive backend status including all running processes and data"""
+    try:
+        import time
+        
+        # Try to import psutil, fall back if not available
+        try:
+            import psutil
+            process = psutil.Process()
+            cpu_percent = process.cpu_percent(interval=1)
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+        except ImportError:
+            cpu_percent = 0.0
+            memory_mb = 0.0
+        
+        orchestrator = await get_orchestrator()
+        
+        # Device metrics
+        device_count = len(orchestrator.state.devices)
+        active_devices = sum(1 for d in orchestrator.state.devices.values() if d.get('is_active', True))
+        
+        # Risk assessment
+        high_risk_devices = sum(1 for d in orchestrator.state.devices.values() 
+                               if d.get('risk_level') in ['high', 'critical'])
+        
+        # Alert metrics
+        alert_count = len(orchestrator.state.alerts)
+        critical_alerts = sum(1 for a in orchestrator.state.alerts 
+                             if a.get('severity') == 'critical')
+        high_alerts = sum(1 for a in orchestrator.state.alerts 
+                         if a.get('severity') == 'high')
+        
+        # Get honeypot info
+        try:
+            honeypots = orchestrator.beta.get_active_honeypots() if hasattr(orchestrator, 'beta') else []
+        except:
+            honeypots = []
+        
+        # Get policies
+        try:
+            policies = orchestrator.gamma.get_segmentation_status() if hasattr(orchestrator, 'gamma') else {}
+        except:
+            policies = {}
+        
+        # Database stats
+        try:
+            session = db_service.local_db.get_session()
+            from core.database import Device, Alert, TrafficLog, HoneypotInteraction
+            
+            db_device_count = session.query(Device).count()
+            db_alert_count = session.query(Alert).count()
+            db_traffic_count = session.query(TrafficLog).count()
+            db_honeypot_count = session.query(HoneypotInteraction).count()
+            
+            db_service.local_db.close_session(session)
+        except:
+            db_device_count = db_alert_count = db_traffic_count = db_honeypot_count = 0
+        
+        return {
+            "timestamp": time.time(),
+            "system": {
+                "status": orchestrator.get_status() if hasattr(orchestrator, 'get_status') else "running",
+                "cpu_usage_percent": cpu_percent,
+                "memory_usage_mb": round(memory_mb, 2),
+                "uptime": "N/A"
+            },
+            "network_monitoring": {
+                "total_devices": device_count,
+                "active_devices": active_devices,
+                "high_risk_devices": high_risk_devices,
+                "devices_isolated": sum(1 for d in orchestrator.state.devices.values() 
+                                       if d.get('isolation_status') != 'normal')
+            },
+            "alerts": {
+                "total_alerts": alert_count,
+                "critical": critical_alerts,
+                "high": high_alerts,
+                "medium": sum(1 for a in orchestrator.state.alerts 
+                             if a.get('severity') == 'medium'),
+                "low": sum(1 for a in orchestrator.state.alerts 
+                          if a.get('severity') == 'low')
+            },
+            "honeypots": {
+                "active_count": len(honeypots) if isinstance(honeypots, list) else 0,
+                "honeypots": honeypots
+            },
+            "security_policies": {
+                "total_policies": len(policies) if isinstance(policies, dict) else 0,
+                "policies": policies
+            },
+            "agents": {
+                "alpha": {
+                    "name": "Network Discovery & Scanning",
+                    "status": "active" if hasattr(orchestrator, 'alpha') else "inactive",
+                    "function": "Real-time network scanning and device discovery"
+                },
+                "beta": {
+                    "name": "Honeypot Deployment & Threat Capture",
+                    "status": "active" if hasattr(orchestrator, 'beta') else "inactive",
+                    "function": "Deploy and manage honeypots for threat detection"
+                },
+                "gamma": {
+                    "name": "Adaptive Segmentation & Response",
+                    "status": "active" if hasattr(orchestrator, 'gamma') else "inactive",
+                    "function": "Implement segmentation policies and containment"
+                }
+            },
+            "database": {
+                "local": {
+                    "type": "SQLite",
+                    "devices": db_device_count,
+                    "alerts": db_alert_count,
+                    "traffic_logs": db_traffic_count,
+                    "honeypot_interactions": db_honeypot_count,
+                    "total_records": db_device_count + db_alert_count + db_traffic_count + db_honeypot_count
+                },
+                "neon": {
+                    "type": "PostgreSQL Cloud",
+                    "status": "connected" if db_service.neon_db else "not_configured",
+                    "url": "***configured***" if os.getenv('NEON_DATABASE_URL') else "not_configured"
+                }
+            },
+            "recent_events": {
+                "latest_devices": list(orchestrator.state.devices.values())[:5] if orchestrator.state.devices else [],
+                "latest_alerts": orchestrator.state.alerts[:5] if orchestrator.state.alerts else [],
+                "total_threats_detected": len(orchestrator.state.alerts)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting comprehensive backend status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get backend status")
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):

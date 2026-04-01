@@ -8,3 +8,5 @@ websockets
 docker
 pyyaml
 requests
+psutil
+sqlalchemy
