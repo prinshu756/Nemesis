@@ -1,15 +1,33 @@
-from intelligence.vector_db.cve_vector_db import CVEDatabase
 import logging
+
+# Optional CVE database support
+try:
+    from intelligence.vector_db.cve_vector_db import CVEDatabase
+    CVE_DB_AVAILABLE = True
+except ImportError:
+    CVE_DB_AVAILABLE = False
+    CVEDatabase = None
 
 logger = logging.getLogger('nemesis')
 
 class RiskEngine:
     def __init__(self):
-        self.cve_db = CVEDatabase()
-        self._load_sample_cves()
+        if CVE_DB_AVAILABLE and CVEDatabase:
+            try:
+                self.cve_db = CVEDatabase()
+                self._load_sample_cves()
+            except Exception as e:
+                logger.warning(f"CVE database initialization failed: {e}")
+                self.cve_db = None
+        else:
+            logger.warning("CVE database not available (faiss module missing)")
+            self.cve_db = None
 
     def _load_sample_cves(self):
         """Load sample CVEs for demonstration"""
+        if not self.cve_db:
+            return
+            
         sample_cves = [
             "Linux SSH brute force vulnerability",
             "Windows RDP remote code execution",
@@ -54,13 +72,14 @@ class RiskEngine:
             risk += 15
         
         # Factor 5: CVE correlation
-        query = f"{device.get('device_type')} {device.get('fingerprint', 'generic')}"
-        try:
-            matches = self.cve_db.search(query)
-            if matches:
-                risk += 30
-        except Exception as e:
-            logger.debug(f"CVE search failed: {e}")
+        if self.cve_db:
+            query = f"{device.get('device_type')} {device.get('fingerprint', 'generic')}"
+            try:
+                matches = self.cve_db.search(query)
+                if matches:
+                    risk += 30
+            except Exception as e:
+                logger.debug(f"CVE search failed: {e}")
         
         # Factor 6: Geographic indicators
         if device.get('country') in ['KP', 'IR', 'SY', 'RU', 'CN']:

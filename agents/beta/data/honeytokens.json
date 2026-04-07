@@ -1,0 +1,52 @@
+{
+  "fb80c740-46a5-413e-9e5a-6a7672dea936": {
+    "id": "fb80c740-46a5-413e-9e5a-6a7672dea936",
+    "data": {
+      "type": "api_token",
+      "token": "gho_42ULFngewB7G6KZSpWBlD1xfypf3czAlo6v1",
+      "service": "GitHub API",
+      "scope": [
+        "repo",
+        "admin:repo_hook",
+        "admin:org_hook"
+      ],
+      "created_at": "2026-04-01T18:36:00.541657"
+    },
+    "created_at": "2026-04-01T18:36:00.541683",
+    "triggered": false,
+    "trigger_details": null
+  },
+  "0900f3c7-fcab-4c04-b322-6e12c9a3ff09": {
+    "id": "0900f3c7-fcab-4c04-b322-6e12c9a3ff09",
+    "data": {
+      "type": "database_connection",
+      "host": "10.0.0.1",
+      "port": 5432,
+      "database": "financial",
+      "username": "admin",
+      "password": "8db922ae82fc8face07f0e175b3ba9c2",
+      "connection_string": "postgresql://admin:8db922ae82fc8face07f0e175b3ba9c2@10.0.0.1:5432/financial",
+      "created_at": "2026-04-01T18:36:00.542607"
+    },
+    "created_at": "2026-04-01T18:36:00.542633",
+    "triggered": false,
+    "trigger_details": null
+  },
+  "57f4510b-1b11-4c43-8ee5-6d2dd158a3c1": {
+    "id": "57f4510b-1b11-4c43-8ee5-6d2dd158a3c1",
+    "data": {
+      "type": "api_token",
+      "token": "ghu_GijLQ8SfFg8hZnSExJqz97eQBXrdjui2KJgX",
+      "service": "GitHub API",
+      "scope": [
+        "repo",
+        "admin:repo_hook",
+        "admin:org_hook"
+      ],
+      "created_at": "2026-04-01T18:36:00.543320"
+    },
+    "created_at": "2026-04-01T18:36:00.543336",
+    "triggered": false,
+    "trigger_details": null
+  }
+}

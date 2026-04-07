@@ -79,6 +79,7 @@ class AgentAlpha:
 
         if device is None:
             # New device
+            is_mobile = self.is_mobile_device(mac)
             self.devices[mac] = {
                 'first_seen': now,
                 'last_seen': now,
@@ -90,6 +91,8 @@ class AgentAlpha:
                 'ports': set(),
                 'ttl_stability': 0,
                 'vm_detected': self.is_vm_device(mac),
+                'is_mobile': is_mobile,
+                'mobile_device_type': self.get_mobile_device_type(mac) if is_mobile else None,
                 'device_type_history': []
             }
             device = self.devices[mac]  # Now get the device reference
@@ -186,6 +189,20 @@ class AgentAlpha:
 
         elif device_type == "macOS":
             return "macOS/iOS"
+        
+        elif device_type == "Android":
+            if tcp_win == 32768:
+                return "Android 4.0-4.4"
+            elif tcp_win == 65535:
+                return "Android 5.0+"
+            return "Android (Generic)"
+        
+        elif device_type == "iOS":
+            return "iOS/iPadOS Device"
+        
+        elif device_type == "Mobile WiFi":
+            return "Mobile Device (WiFi Connected)"
+        
         elif device_type == "Router":
             return "Network Device / Router"
         
@@ -196,6 +213,19 @@ class AgentAlpha:
         if ttl is None:
             return None
         
+        # Android typical TTL values: 64, 128
+        if ttl >= 64 and ttl <= 65:
+            return "Android"
+        
+        # iOS typical TTL values: 64, 255
+        if ttl == 255:
+            return "iOS"
+        
+        # Mobile WiFi (some devices use TTL 60-64 when connected via WiFi)
+        if ttl >= 60 and ttl <= 63:
+            return "Mobile WiFi"
+        
+        # Standard Linux
         if ttl >= 64 and ttl <= 76:
             return "Linux"
         elif ttl >= 100 and ttl <= 128:
@@ -245,6 +275,82 @@ class AgentAlpha:
                 return vm_type
         
         return "Unknown VM"
+
+    def is_mobile_device(self, mac):
+        """Detect if device is a mobile device (phone/tablet) based on MAC address"""
+        mac_upper = mac.upper()
+        
+        # Common mobile device MAC address prefixes
+        mobile_prefixes = [
+            # Apple (iPhone, iPad)
+            "A4:77:6B", "A8:BB:CF", "AC:DE:48", "AC:FD:EC", "B8:F6:B1", "BC:15:64", 
+            "C0:EE:FB", "D0:27:88", "D4:6E:0E", "D8:96:95", "DC:41:A9",
+            
+            # Samsung (Android phones)
+            "00:02:F7", "00:12:FB", "00:16:3B", "00:1A:8A", "08:19:A6", "10:C6:1F",
+            "34:F3:12", "50:F5:DA", "5C:F3:70", "6C:0B:84", "8C:DC:D4", "90:72:40",
+            "C4:43:8F", "F4:4E:D7", "F8:A9:D0",
+            
+            # Google Pixel (Android)
+            "00:18:8B", "2C:F0:EE", "50:FD:54", "B4:83:37", "D8:24:BD",
+            
+            # LG (Android)
+            "00:10:86", "00:1D:C2", "04:21:95", "78:25:AD", "90:B6:77",
+            
+            # HTC (Android)
+            "00:15:00", "00:26:DE", "20:89:84", "80:E6:95", "F8:8F:CA",
+            
+            # OnePlus (Android)
+            "00:BD:3B", "28:E0:2C", "50:3A:FC", "8E:1F:34",
+            
+            # Xiaomi (MIUI/Android)
+            "04:F1:38", "60:45:CB", "7C:AB:E9", "A4:37:B7", "E0:60:66",
+            
+            # Huawei (Android)
+            "00:14:88", "00:E0:4C", "08:57:1B", "3C:6D:B7", "C8:3A:6B",
+            
+            # Sony (Android)
+            "00:19:C3", "1C:AF:F7",
+        ]
+        
+        for prefix in mobile_prefixes:
+            if mac_upper.startswith(prefix):
+                return True
+        
+        return False
+    
+    def get_mobile_device_type(self, mac):
+        """Identify specific mobile device type"""
+        mac_upper = mac.upper()
+        
+        mobile_types = {
+            # Apple
+            "A4:77:6B": "Apple (iPhone/iPad)",
+            "A8:BB:CF": "Apple (iPhone/iPad)",
+            "AC:DE:48": "Apple (iPhone/iPad)",
+            "D0:27:88": "Apple (iPhone/iPad)",
+            "D8:96:95": "Apple (iPhone/iPad)",
+            
+            # Samsung
+            "00:02:F7": "Samsung (Android)",
+            "10:C6:1F": "Samsung (Android)",
+            "5C:F3:70": "Samsung (Android)",
+            "C4:43:8F": "Samsung (Android)",
+            
+            # Google
+            "2C:F0:EE": "Google Pixel",
+            "B4:83:37": "Google Pixel",
+            
+            # Generic Android
+            "34:F3:12": "Android Device",
+            "50:F5:DA": "Android Device",
+        }
+        
+        for prefix, device_type in mobile_types.items():
+            if mac_upper.startswith(prefix):
+                return device_type
+        
+        return "Mobile Device (Unknown)"
 
     def detect_ttl_anomaly(self, mac):
         """Detect anomalies in TTL history for a device"""

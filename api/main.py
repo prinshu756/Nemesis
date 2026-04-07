@@ -64,11 +64,33 @@ async def devices():
         orchestrator = await get_orchestrator()
         devices = []
         for mac, device in orchestrator.state.devices.items():
-            # Add computed risk score
-            risk_score = orchestrator.risk_engine.compute_risk(device)
+            # Create device copy with all necessary fields
             device_copy = device.copy()
-            device_copy['risk_score'] = risk_score
-            device_copy['mac'] = mac
+            
+            # Ensure all required fields are present
+            if 'mac' not in device_copy:
+                device_copy['mac'] = mac
+            if 'status' not in device_copy:
+                device_copy['status'] = 'online'
+            if 'health' not in device_copy:
+                device_copy['health'] = 85
+            if 'power_level' not in device_copy:
+                device_copy['power_level'] = 85
+            if 'hostname' not in device_copy:
+                device_copy['hostname'] = f"Device-{mac.split(':')[-1].upper()}"
+            if 'risk_score' not in device_copy:
+                device_copy['risk_score'] = orchestrator.risk_engine.compute_risk(device)
+            if 'risk_level' not in device_copy:
+                device_copy['risk_level'] = _get_risk_level(device_copy.get('risk_score', 0))
+            
+            # Ensure ports is a list (convert from set if needed)
+            if 'ports' in device_copy and isinstance(device_copy['ports'], set):
+                device_copy['ports'] = list(device_copy['ports'])
+            
+            # Include mobile device information
+            if device_copy.get('is_mobile'):
+                device_copy['device_type'] = device_copy.get('mobile_device_type', 'Mobile Device')
+            
             devices.append(device_copy)
 
         return {"devices": devices, "count": len(devices)}
@@ -189,6 +211,90 @@ async def get_honeypots():
     except Exception as e:
         logger.error(f"Error fetching honeypots: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch honeypots")
+
+@app.get("/beta/engagement-metrics")
+async def get_beta_engagement_metrics():
+    """Get Beta Agent engagement metrics"""
+    try:
+        orchestrator = await get_orchestrator()
+        if not orchestrator.beta:
+            raise HTTPException(status_code=503, detail="Agent Beta not available")
+        
+        metrics = orchestrator.beta.get_engagement_metrics()
+        return {"metrics": metrics}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Beta metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch engagement metrics")
+
+@app.get("/beta/honeytokens")
+async def get_honeytokens():
+    """Get honeytokens status and details"""
+    try:
+        orchestrator = await get_orchestrator()
+        if not orchestrator.beta:
+            raise HTTPException(status_code=503, detail="Agent Beta not available")
+        
+        tokens = orchestrator.beta.honeytoken_gen.honeytokens
+        token_summary = {
+            'total': len(tokens),
+            'triggered': sum(1 for t in tokens.values() if t.get('triggered', False)),
+            'active': sum(1 for t in tokens.values() if not t.get('triggered', False)),
+            'tokens': {
+                token_id: {
+                    'type': t['data'].get('type'),
+                    'created_at': t.get('created_at'),
+                    'triggered': t.get('triggered', False),
+                    'trigger_details': t.get('trigger_details')
+                }
+                for token_id, t in tokens.items()
+            }
+        }
+        
+        return {"honeytokens": token_summary}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching honeytokens: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch honeytokens")
+
+@app.post("/beta/honeytokens/generate")
+async def generate_honeytoken(token_type: str = 'random'):
+    """Generate a new honeytoken"""
+    try:
+        orchestrator = await get_orchestrator()
+        if not orchestrator.beta:
+            raise HTTPException(status_code=503, detail="Agent Beta not available")
+        
+        honeytoken = orchestrator.beta.honeytoken_gen.generate_honeytoken(token_type)
+        return {
+            "message": f"Honeytoken generated",
+            "honeytoken_id": honeytoken['id'],
+            "type": honeytoken['data'].get('type'),
+            "created_at": honeytoken['created_at']
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating honeytoken: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate honeytoken")
+
+@app.get("/beta/engagement-report")
+async def get_beta_report():
+    """Get comprehensive Beta Agent engagement report"""
+    try:
+        orchestrator = await get_orchestrator()
+        if not orchestrator.beta:
+            raise HTTPException(status_code=503, detail="Agent Beta not available")
+        
+        report = orchestrator.beta.get_engagement_report()
+        return {"report": report}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating Beta report: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate report")
 
 @app.get("/policies")
 async def get_policies():

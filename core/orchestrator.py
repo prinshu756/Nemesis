@@ -47,7 +47,8 @@ class NemesisOrchestrator:
     def beta(self):
         if self._beta is None:
             try:
-                self._beta = AgentBeta()
+                # Pass alpha agent instance to beta for integration
+                self._beta = AgentBeta(alpha_agent=self.alpha)
                 logger.info("Agent Beta initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Agent Beta: {e}")
@@ -70,6 +71,11 @@ class NemesisOrchestrator:
         logger.info("Starting Nemesis orchestration loop")
 
         try:
+            # Register Beta as threat callback from Alpha
+            if self.alpha and self.beta:
+                self.alpha.add_threat_callback(self.beta.on_threat_detected)
+                logger.info("✓ Registered Agent Beta as threat callback for Agent Alpha")
+            
             # Start Alpha's packet capture in background thread
             asyncio.create_task(asyncio.to_thread(self._run_alpha_capture))
 
@@ -95,11 +101,39 @@ class NemesisOrchestrator:
 
         for mac, device in list(self.alpha.devices.items()):
             try:
-                # Update state
-                self.state.update_device(mac, device)
-
                 # Compute risk
                 risk = self.risk_engine.compute_risk(device)
+                
+                # Determine risk level
+                thresholds = config.get('risk_thresholds', {})
+                if risk >= thresholds.get('high', 80):
+                    risk_level = 'critical'
+                elif risk >= thresholds.get('medium', 50):
+                    risk_level = 'high'
+                elif risk >= thresholds.get('low', 20):
+                    risk_level = 'medium'
+                else:
+                    risk_level = 'low'
+                
+                # Enrich device data with frontend-required fields
+                enriched_device = {
+                    **device,
+                    'mac': mac,
+                    'risk_score': risk,
+                    'risk_level': risk_level,
+                    'status': 'online',  # Default status
+                    'isolation_status': 'normal',  # Default isolation status
+                    'health': max(0, 100 - risk),  # Health inversely proportional to risk
+                    'power_level': 85,  # Placeholder for device power/battery level
+                    'hostname': f"Device-{mac.split(':')[-2:][:2][-1].upper()}",  # Generate hostname from MAC
+                    'device_type': device.get('fingerprint', 'Unknown').split('(')[0].strip() if device.get('fingerprint') else 'Unknown',
+                    'is_mobile': device.get('is_mobile', False),
+                    'mobile_device_type': device.get('mobile_device_type'),
+                    'id': mac  # For backward compatibility
+                }
+                
+                # Update state
+                self.state.update_device(mac, enriched_device)
 
                 # Determine action based on risk
                 action = self._determine_action(risk, device)
